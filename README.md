@@ -16,7 +16,9 @@ For fast processing, I recommend the following model weights:
 Enable 'Flash Attention'!
 
 **Make sure that the model's filename has the name of the base model in it! Otherwise it won't know which template to use!**
+
 Good Example: `qwen2.5-3b-instruct-q6_k.gguf`
+
 Bad Example: `finetuned-3b-q6_k.gguf` <-- MUST HAVE ENTRY IN APPROPRIATE ADAPTER IN TEMPLATES
 
 If you have a model without the base name in the filename, edit the appropriate adapter in the templates folder and add part of the filename to the "aka" key

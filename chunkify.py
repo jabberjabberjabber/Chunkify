@@ -398,7 +398,7 @@ class LLMProcessor:
                 current_size = 0
                 ongoing_content = []
                 for response in responses:
-                    ongoing_content.append[response]
+                    ongoing_content.append(response)
                     if len(ongoing_content.split()) > max_size:
                         break
                 content = ongoing_content      

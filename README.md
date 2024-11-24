@@ -8,11 +8,23 @@ The processing tasks were added to give the script some utility, and it should p
 
 KoboldCpp is a one-file, cross-platform inference engine with a built in Web GUI and API, and will serve language models and vision models, as well as image diffusion models. It is based on Llama.cpp and uses GGUF model weights.
 
-For this script I recommend Command-R 08 2024 in at least a Q4 quant.
+For fast processing, I recommend the following model weights:
+- Llama 3.2 3b Instruct (Q6_K)
+- Phi 3.5 Mini Instruct (Q6_K)
+- Qwen 2.5 3b Instruct (Q6_K)
+
+Enable 'Flash Attention'!
+
+**Make sure that the model's filename has the name of the base model in it! Otherwise it won't know which template to use!**
+Good Example: `qwen2.5-3b-instruct-q6_k.gguf`
+Bad Example: `finetuned-3b-q6_k.gguf` <-- MUST HAVE ENTRY IN APPROPRIATE ADAPTER IN TEMPLATES
+
+If you have a model without the base name in the filename, edit the appropriate adapter in the templates folder and add part of the filename to the "aka" key
 
 This script requires Python but needs no external libraries to be installed!
 
 ![Real time chunking and processing of the Alice in Wonderland in its entirety, taking 1m02s with Llama 3.2 3B at 4096 context on a 3080 10GB](./screen.webp)
+*Realtime processing of the entire text of Alice in Wonderland in ~1 minute using consumer hardware*
 
 ## Features
 

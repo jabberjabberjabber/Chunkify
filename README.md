@@ -2,7 +2,7 @@
 
 A Python script for processing text through Large Language Models (LLMs) via the Kobold API. The script supports chunking large documents, handling various instruction templates, and multiple processing tasks including summarization, translation, text distillation, and correction.
 
-This script was created as a proof-of-concept for a non-tokenizer based chunker that could stop at natural text breaks. It is the most basic form of chunking text in that only regex is used along with a basic size limiter based on a 1.5:1 word:token conversion. 
+This script was created as a proof-of-concept for a non-tokenizer based chunker that could stop at natural text breaks. It is the most basic form of chunking text in that only regex is used along with a basic size limiter. 
 
 The processing tasks were added to give the script some utility, and it should provide a good basis for all sort of simple text processing functions using LLMs.
 

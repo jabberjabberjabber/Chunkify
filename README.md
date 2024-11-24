@@ -27,9 +27,6 @@ Bad Example: `finetuned-3b-q6_k.gguf` <-- MUST HAVE ENTRY IN APPROPRIATE ADAPTER
 
 If you have a model without the base name in the filename, edit the appropriate adapter in the templates folder and add part of the filename to the "aka" key
 
-This script requires Python but needs no external libraries to be installed!
-
-
 
 ## Features
 
@@ -52,6 +49,7 @@ This script requires Python but needs no external libraries to be installed!
 - Required Python packages:
   ```
   requests
+  regex
   dataclasses (included in Python 3.7+)
   ```
 

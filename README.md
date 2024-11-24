@@ -12,6 +12,8 @@ For this script I recommend Command-R 08 2024 in at least a Q4 quant.
 
 This script requires Python but needs no external libraries to be installed!
 
+![Real time chunking and processing of the Alice in Wonderland in its entirety, taking one and half minutes with Llama 3.2 3B at 4096 context on a 3080 10GB](./screen.webp)
+
 ## Features
 
 - Document chunking with intelligent break points (chapters, headings, paragraphs, sentences)

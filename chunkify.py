@@ -7,7 +7,7 @@ from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Union
 from urllib.parse import urlparse
-from chunker import chunk_regex 
+from chunker_regex import chunk_regex 
 from clean_json import clean_json 
 import threading
 import time
@@ -30,10 +30,10 @@ class LLMConfig:
     api_password: str
     text_completion: bool = False
     gen_count: int = 500
-    temp: float = 0.7
-    rep_pen: float = 1.0
-    min_p: float = 0.2
-    summary_instruction="Provide a coherent summary combining the main points from all chunks."
+    temp: float = 0.5
+    rep_pen: float = 1.05
+    min_p: float = 0.02
+    summary_instruction="Summarize the text succinctly."
     translate_instruction="Translate the following chunk into English. Do not preface or add any text; only translate."
     distill_instruction="Rewrite the following chunk to be as concise as possible without losing meaning."
     correct_instruction="Correct any grammar, spelling, style, or format errors in this chunk."
@@ -163,8 +163,8 @@ class LLMProcessor:
         model_name = self._call_api("model")
         if not model_name:
             print("Could not get model name from API, falling back to alpaca template")
-            return self.templates.get("alpaca")
-
+            #return self.templates.get("alpaca")
+            model_name = "alpaca"
         print(f"Kobold reports model: {model_name}")
 
         def normalize(s):
@@ -251,7 +251,7 @@ class LLMProcessor:
             return None
 
             
-    def compose_prompt(self, system_instruction, instruction, content):
+    def compose_prompt(self, system_instruction="", instruction="", content=""):
         """ Create a prompt using the template and send to Kobold
             Returns the generated text
         """
@@ -275,7 +275,7 @@ class LLMProcessor:
             raise ValueError("No model template loaded")
         if self.model["name"] == ["Completion"]:
             return f"{instruction} {content}".strip()
-        user_text = f"{instruction} {content}".strip()
+        user_text = f"{instruction} {content} {instruction}".strip()
         if not user_text:
             raise ValueError("No user text provided (both instruction and content are empty)")
         prompt_parts = []
@@ -353,7 +353,7 @@ class LLMProcessor:
         response = self._call_api("generate", analysis_prompt)
         return clean_json(response)
         
-    def process_in_chunks(self, content: Union[str, Path], instruction: str = "", system_instruction: str = ""):
+    def process_in_chunks(self, content, instruction, system_instruction):
         """ Process content in chunks while maintaining context
         """
         metadata = self.analyze_document(content)
@@ -371,21 +371,22 @@ class LLMProcessor:
         while remaining:
             chunk = self._get_initial_chunk(remaining, max_chunk)
             chunks.append(chunk)
-            remaining = remaining[len(chunk):].lstrip()
+            remaining = remaining[len(chunk):]
         
         responses = []
         total_chunks = len(chunks)
         
         for i, chunk in enumerate(chunks, 1):
            
-            chunk_context = f"""\n\n## Metadata\nDocument: {metadata['title']}\nType: {metadata['type']}\nChunk: {i} of {total_chunks}\n\n## Begin Chunk: {chunk}"""
+            chunk_context = f"""\n\n## Metadata\nDocument: {metadata['title']}\nType: {metadata['type']}\nChunk: {i} of {total_chunks}\n\nSTART:\n\n{chunk}"""
             
             response = self.generate_with_status(self.compose_prompt(
                 system_instruction=system_instruction,
                 instruction=instruction,
                 content=chunk_context
             ))
-            responses.append(response)
+            if response:
+                responses.append(response)
         
         return responses
     
@@ -396,10 +397,24 @@ class LLMProcessor:
         
         if task == "summary":
             responses = self.process_in_chunks(content, self.summary_instruction, system_instruction)
+            
+            content = "\n\n".join(responses)
+            
+            max_size = int(self._convert_tokens_and_words("tokens", self.max_context) *.75)
+            
+            if len(content.split()) > max_size:
+                current_size = 0
+                ongoing_content = []
+                for response in responses:
+                    ongoing_content.append[response]
+                    if len(ongoing_content.split()) > max_size:
+                        break
+                content = ongoing_content      
+            
             summary = self.generate_with_status(self.compose_prompt(
-                system_instruction="Synthesize the key points from these processed chunks.",
+                system_instruction="Use these individual summaries to compose an overall summary",
                 instruction="Provide a coherent summary combining the main points from all chunks.",
-                content="\n\n".join(responses)
+                content=content
             ))
             return {
                 'metadata': metadata,

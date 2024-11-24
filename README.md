@@ -139,6 +139,7 @@ By default we use the templates included in the KoboldCpp repo under `/kcpp_adap
 - Maximum context length is determined by the loaded model
 - Processing speed depends on the API response time
 - Templates must match the format expected by the LLM
+- May crash if it can't find an appropriate model for instruct template
 
 ## Breakdown
 

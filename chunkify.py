@@ -300,15 +300,7 @@ class LLMProcessor:
         return "".join(prompt_parts)
         
     def _get_initial_chunk(self, content: str, max_size: int):
-        """ We are chunking based on natural break points. This will
-            use regex to find and break on, in order of preference:
-            - End of chapter
-            - End of heading
-            - End of paragraph
-            - End of sentence
-            
-            It will proceed to the most favorable break point before max
-            chunk size
+        """ We are chunking based on natural break points. 
         """
         
         max_size_words = self._convert_tokens_and_words("tokens", max_size)

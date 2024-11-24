@@ -11,7 +11,6 @@ from chunker_regex import chunk_regex
 from clean_json import clean_json 
 import threading
 import time
-from queue import Queue
 
 def clearConsole():
     """ Borrowed this from somewhere else, hence the casing
@@ -331,32 +330,21 @@ class LLMProcessor:
         first_chunk = self._get_initial_chunk(content, max_chunk)
         
         analysis_prompt = self.compose_prompt(
-            system_instruction="""Analyze this document excerpt and provide metadata in JSON format.
-                                Include only the JSON response with no other text.""",
-            instruction="""Return a JSON object with the following fields:
-                          - title: The document's title or a generated one if none exists
-                          - type: The document type (article, code, technical doc, etc.)
-                          - subject: Main subject matter
-                          - language: If code, what language
-                          - structure: Key structural elements found (headers, sections, etc.)""",
+            instruction= """Return a JSON object as follows: {"title": DOCUMENT TITLE,"type": DOCUMENT TYPE,"subject": DOCUMENT SUBJECT,"language": DOCUMENT LANGUAGE,"keywords": [RELEVANT SEARCH TERMS]}""",
             content=first_chunk
         )
         
         response = self._call_api("generate", analysis_prompt)
         return clean_json(response)
         
-    def process_in_chunks(self, content, instruction, system_instruction):
+    def process_in_chunks(self, metadata, content, instruction, system_instruction):
         """ Process content in chunks while maintaining context
         """
-        metadata = self.analyze_document(content)
-        if not metadata:
-            metadata = {
-                'title': 'Untitled Document',
-                'type': 'Unknown',
-                'subject': 'Unknown',
-                'structure': []
-            }
-        
+        title = metadata.get('title', 'Untitled Document')
+        type = metadata.get('type', 'Unknown')
+        subject = metadata.get('subject', 'Unknown')
+        keywords = metadata.get('keywords', [])
+   
         max_chunk = int(self.max_context // 2)
         chunks = []
         remaining = content
@@ -369,8 +357,8 @@ class LLMProcessor:
         total_chunks = len(chunks)
         
         for i, chunk in enumerate(chunks, 1):
-           
-            chunk_context = f"""\n\n## Metadata\nDocument: {metadata['title']}\nType: {metadata['type']}\nChunk: {i} of {total_chunks}\n\nSTART:\n\n{chunk}"""
+            
+            chunk_context = f"""\n\n## Metadata\nDocument: {title}\nType: {type}\nSubject: {subject}\nChunk: {i} of {total_chunks}\n\nSTART:\n\n{chunk}"""
             
             response = self.generate_with_status(self.compose_prompt(
                 system_instruction=system_instruction,
@@ -379,16 +367,18 @@ class LLMProcessor:
             ))
             if response:
                 responses.append(response)
-        
+            else:
+                continue
         return responses
     
     def route_task(self, system_instruction, task, content):
         """ Route task according to required job
         """
+        
         metadata = self.analyze_document(content)
         
         if task == "summary":
-            responses = self.process_in_chunks(content, self.summary_instruction, system_instruction)
+            responses = self.process_in_chunks(metadata, content, self.summary_instruction, system_instruction)
             
             content = "\n\n".join(responses)
             
@@ -398,6 +388,7 @@ class LLMProcessor:
                 current_size = 0
                 ongoing_content = []
                 for response in responses:
+                    ongoing_content.append(response)
                     ongoing_content.append(response)
                     if len(ongoing_content.split()) > max_size:
                         break
@@ -413,13 +404,27 @@ class LLMProcessor:
                 'responses': responses,
                 'summary': summary
             }
-        else:
-            responses = self.process_in_chunks(content, getattr(self, f"{task}_instruction"), system_instruction)
+        elif task == "correct":
+            responses = self.process_in_chunks(metadata, content, self.correct_instruction, system_instruction)
             return {
                 'metadata': metadata,
                 'response': "\n\n".join(responses)
             }
-        
+        elif task == "translate":
+            responses = self.process_in_chunks(metadata, content, self.translate_instruction, system_instruction)
+            return {
+                'metadata': metadata,
+                'response': "\n\n".join(responses)
+            }
+        elif task == "distill":
+            responses = self.process_in_chunks(metadata, content, self.distill_instruction, system_instruction)
+            return {
+                'metadata': metadata,
+                'response': "\n\n".join(responses)
+            }
+        else:
+            return
+            
     def generate_with_status(self, prompt):
         """ Threads generation so that we can stream the output onto the 
             console otherwise we stare at a blank screen

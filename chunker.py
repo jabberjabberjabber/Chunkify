@@ -1,3 +1,6 @@
+# code source: https://gist.github.com/hanxiao/3f60354cf6dc5ac698bc9154163b4e6a
+# link: https://jina.ai/tokenizer/
+
 import regex as re
 
 MAX_HEADING_LENGTH = 7

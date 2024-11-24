@@ -1,4 +1,3 @@
-from json_repair import repair_json as rj
 from fix_busted_json import first_json
 import re
 import json
@@ -34,11 +33,11 @@ def clean_json(data):
         data = re.sub(r"\n", " ", data)
         data = re.sub(r'["""]', '"', data)
         try:
-            return json.loads(rj(data))
+            return json.loads(data)
                 
             # first_json will return the first json found in a string
             # rj tries to repair json using some heuristics
-            return json.loads(first_json(rj(data)))
+            return json.loads(first_json(data))
             
             # Is it a markdown list?
             if result := markdown_list_to_dict(data):

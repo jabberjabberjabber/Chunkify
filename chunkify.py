@@ -338,7 +338,7 @@ class LLMProcessor:
         while remaining:
             chunk = self._get_initial_chunk(remaining, max_chunk)
             chunks.append(chunk)
-            remaining = remaining[len(chunk):]
+            remaining = remaining[len(chunk):].strip()
         
         responses = []
         total_chunks = len(chunks)

@@ -11,6 +11,7 @@ from chunker_regex import chunk_regex
 from clean_json import clean_json 
 import threading
 import time
+from extractous import Extractor
 
 def clearConsole():
     """ Borrowed this from somewhere else, hence the casing
@@ -28,11 +29,13 @@ class LLMConfig:
     api_url: str
     api_password: str
     text_completion: bool = False
-    gen_count: int = 500
-    temp: float = 0.5
+    gen_count: int = 500 #not used, set to 1/2 max_context
+    temp: float = 0.0
     rep_pen: float = 1.05
     min_p: float = 0.02
-    summary_instruction="Summarize the text succinctly."
+    top_k: int = 1
+    top_p: int = 1
+    summary_instruction="Extract the key points, themes and actions from the text succinctly without developing any conclusions or commentary."
     translate_instruction="Translate the following chunk into English. Do not preface or add any text; only translate."
     distill_instruction="Rewrite the following chunk to be as concise as possible without losing meaning."
     correct_instruction="Correct any grammar, spelling, style, or format errors in this chunk."
@@ -100,6 +103,7 @@ class LLMProcessor:
         self.max_context = self._get_max_context_length()
         self.generated = False
         self.system_instruction = "You are a helpful assistant."
+        self.max_length = int(self.max_context // 2)
         
     def _get_templates(self):
         """ Look in the templates directory and load JSON template files
@@ -290,10 +294,10 @@ class LLMProcessor:
         prompt = self.get_prompt(instruction, content, metadata)
         payload = {
             "prompt": prompt,
-            "max_length": int(self.max_context // 2),
+            "max_length": self.max_length,
             "genkey": self.genkey,
-            "top_p": 1,
-            "top_k": 0,
+            "top_p": self.config.top_p,
+            "top_k": self.config.top_k,
             "temp": self.config.temp,
             "rep_pen": self.config.rep_pen,
             "min_p": self.config.min_p,
@@ -337,18 +341,25 @@ class LLMProcessor:
         remaining = content
         while remaining:
             chunk = self._get_initial_chunk(remaining, max_chunk)
+            chunk_len = len(chunk)
+            print(f"Got chunk of length {chunk_len}")  # Debug
+            if chunk_len == 0:
+                print("Warning: Got zero-length chunk")
+                break  # Prevent infinite loop
             chunks.append(chunk)
             remaining = remaining[len(chunk):].strip()
         
         responses = []
         total_chunks = len(chunks)
-        
+        print("Starting chunk processing...")
         for i, chunk in enumerate(chunks, 1):
+            print(f"Processing chunk {i}/{total_chunks}")
             chunk_context = f"""\n\n## Metadata\nDocument: {title}\nType: {type}\nSubject: {subject}\nChunk: {i} of {total_chunks}\n\n<DOCUMENT>\n\n{chunk}</DOCUMENT>\n\n"""
             response = self.generate_with_status(self.compose_prompt(
                 instruction=instruction,
                 content=chunk_context
             ))
+            print(f"Chunk {i} complete")
             if response:
                 responses.append(response)
         return responses
@@ -356,12 +367,129 @@ class LLMProcessor:
     def route_task(self, task="summary", content="", metadata=None):
         metadata = metadata or self.analyze_document(content)
         
-        if task in ["summary", "correct", "translate", "distill"]:
+        if task in ["correct", "translate", "distill"]:
             instruction = getattr(self, f"{task}_instruction")
             responses = self.process_in_chunks(instruction, content, metadata)
             return responses, metadata
+        elif task == "summary":
+            instruction = getattr(self, f"summary_instruction")
+            summaries, final_summary = self.process_summary(instruction, content, metadata)
+            return summaries, final_summary, metadata
         else:
             raise ValueError(f"Unknown task: {task}")    
+    def process_summary(self, instruction="", content="", metadata=None, rolling_summary_threshold=3):
+        """ Process content in chunks with both individual and rolling summaries.
+            
+            Args:
+                instruction (str): Base instruction for processing
+                content (str): Content to be processed
+                metadata (dict): Document metadata
+                rolling_summary_threshold (int): Number of summaries to accumulate before distilling
+            
+            Returns:
+                tuple: (individual_summaries, rolling_summaries, final_summary)
+        """
+        metadata = metadata or {}
+        title = metadata.get('title', 'Untitled Document')
+        doc_type = metadata.get('type', 'Unknown')
+        subject = metadata.get('subject', 'Unknown')
+        keywords = metadata.get('keywords', [])
+
+        max_chunk = int(self.max_context // 2)
+        chunks = []
+        remaining = content
+        
+        # Split content into chunks
+        while remaining:
+            chunk = self._get_initial_chunk(remaining, max_chunk)
+            chunk_len = len(chunk)
+            if chunk_len == 0:
+                print("Warning: Got zero-length chunk")
+                break
+            chunks.append(chunk)
+            remaining = remaining[len(chunk):].strip()
+
+        individual_summaries = []
+        rolling_summaries = []
+        current_rolling_group = []
+        total_chunks = len(chunks)
+        
+        print(f"Starting chunk processing... ({total_chunks} chunks)")
+        
+        for i, chunk in enumerate(chunks, 1):
+        # Process individual chunk
+            chunk_context = f"""## Metadata
+Document: {title}
+Type: {doc_type}
+Subject: {subject}
+Chunk: {i} of {total_chunks}
+
+Previous Summary: {rolling_summaries[-1] if rolling_summaries else 'None'}
+
+<DOCUMENT>
+{chunk}
+</DOCUMENT>
+"""
+        
+            # Get individual chunk summary
+            chunk_response = self.generate_with_status(self.compose_prompt(
+                instruction=instruction,
+                content=chunk_context
+            ))
+            
+            if chunk_response:
+                individual_summaries.append(chunk_response)
+                current_rolling_group.append(chunk_response)
+                
+                # Check if we need to create a rolling summary
+                if len(current_rolling_group) >= rolling_summary_threshold:
+                    rolling_context = f"""## Previous Summaries
+
+{chr(10).join(current_rolling_group)}
+
+## Task
+Create a concise rolling summary that captures the key points from these summaries while maintaining coherent narrative flow.
+Emphasize recurring themes and major developments. The summary should be shorter than the combined input summaries."""
+
+                    rolling_response = self.generate_with_status(self.compose_prompt(
+                        instruction="Synthesize these summaries into a single coherent summary:",
+                        content=rolling_context
+                    ))
+                    
+                    if rolling_response:
+                        rolling_summaries.append(rolling_response)
+                        current_rolling_group = [rolling_response]  # Keep last summary for context
+                        
+                    print(f"Created rolling summary at chunk {i}")
+
+    # Create final summary if there are any remaining chunks
+        if current_rolling_group:
+            final_context = f"""## Document Information
+Title: {title}
+Type: {doc_type}
+Subject: {subject}
+
+## All Summaries
+{chr(10).join(individual_summaries)}
+
+## Task
+Create a comprehensive final summary of the entire document. Focus on:
+1. Major themes and developments
+2. Key points from each section
+3. Overall narrative flow and conclusions
+The summary should be thorough but more concise than the combined input."""
+
+            final_summary = self.generate_with_status(self.compose_prompt(
+                instruction="Create a comprehensive final summary:",
+                content=final_context
+            ))
+        else:
+            final_summary = None
+        summaries = {
+            "individual_summaries": individual_summaries,
+            "rolling_summaries": rolling_summaries,
+            }
+        return summaries, final_summary
 
     def generate_with_status(self, prompt):
         """ Threads generation so that we can stream the output onto the 
@@ -442,20 +570,12 @@ class LLMProcessor:
     def _get_content(self, content):            
         """ Read text from a file to chunk
         """
-        try:
-            with open(content, 'r', encoding='utf-8') as file:
-                return file.read()
-        except UnicodeDecodeError:
-           
-            try:
-                with open(content, 'r', encoding='latin-1') as file:
-                    return file.read()
-            except Exception as e:
-                raise ValueError(f"Could not read file {content}: {str(e)}")
-        except Exception as e:
-            raise ValueError(f"Error reading file {content}: {str(e)}")      
-        return
-        
+        extractor = Extractor()
+        #if os.path.splitext(content)[1] in ["txt", "pdf", "md"]:
+        result, metadata = extractor.extract_file_to_string(content)
+             
+        return result, metadata
+        #return
 def write_output(output_path: str, task: str, responses, metadata):
     """ Write the task response to a file with metadata headers
     """
@@ -474,6 +594,34 @@ def write_output(output_path: str, task: str, responses, metadata):
     except Exception as e:
         print(f"Error writing output file: {str(e)}")
         
+def write_summary_output(output_path: str, summaries, final_summary, metadata):
+    """ Write all summaries to file with clear section separation.
+    """
+    try:
+        with open(output_path, 'w', encoding='utf-8') as f:
+            f.write("# Document Analysis\n\n")
+            
+            f.write("## Metadata\n")
+            for key, value in metadata.items():
+                f.write(f"{key}: {value}\n")
+            
+            f.write("\n## Final Summary\n")
+            if final_summary:
+                f.write(f"{final_summary}")
+            
+            f.write("\n\n## Rolling Summaries\n")
+            for i, summary in enumerate(summaries["rolling_summaries"], 1):
+                f.write(f"Rolling Summary {i}:\n{summary}\n")
+            
+            f.write("\n## Individual Chunk Summaries\n")
+            for i, summary in enumerate(summaries["individual_summaries"], 1):
+                f.write(f"\nChunk {i}:\n{summary}\n")
+        
+        print(f"\nOutput written to: {output_path}")
+    except Exception as e:
+        print(f"Error writing output file: {str(e)}")
+
+        
 if __name__ == "__main__":
     import argparse
     
@@ -485,7 +633,7 @@ if __name__ == "__main__":
     parser.add_argument("--templates", type=str, default="./templates", help="Directory for instruct templates")
     parser.add_argument("--task", type=str, default="summary", help="Task: summary, translate, distill, correct")
     parser.add_argument("--file", type=str, default="output.txt", help="Output to file path")
-    
+   
     args = parser.parse_args()
     try:
         if args.config:
@@ -499,11 +647,15 @@ if __name__ == "__main__":
             
         task = args.task.lower()
         processor = LLMProcessor(config)
-        content = processor._get_content(args.content)    
+        content, metadata = processor._get_content(args.content)    
+        print(metadata)
         file = args.file
-        if task in ["summary", "translate", "distill", "correct"]:
-            responses, metadata = processor.route_task(task, content)
-            write_output(file, task, responses, metadata) 
+        if task in ["translate", "distill", "correct"]:
+            responses, llm_metadata = processor.route_task(task, content)
+            write_output(file, task, responses, llm_metadata) 
+        elif task == "summary":
+            summaries, final_summary, llm_metadata = processor.route_task("summary", content)
+            write_summary_output(file, summaries, final_summary, llm_metadata)
         else:
             print("Error - No task selected from: summary, translate, distill, correct")
             

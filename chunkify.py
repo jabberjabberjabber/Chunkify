@@ -99,7 +99,8 @@ class LLMProcessor:
         self.model = self._get_model()
         self.max_context = self._get_max_context_length()
         self.generated = False
-
+        self.system_instruction = "You are a helpful assistant."
+        
     def _get_templates(self):
         """ Look in the templates directory and load JSON template files
             Falls back to Alpaca format if no valid templates found
@@ -249,59 +250,9 @@ class LLMProcessor:
             print(f"Error calling API: {str(e)}")
             return None
 
-            
-    def compose_prompt(self, system_instruction="", instruction="", content=""):
-        """ Create a prompt using the template and send to Kobold
-            Returns the generated text
-        """
-        prompt = self.get_prompt(system_instruction, instruction, content)
-        payload = {
-            "prompt": prompt,
-            "max_length": int(self.max_context // 2),
-            "genkey": self.genkey,
-            "top_p": 1,
-            "top_k": 0,
-            "temp": self.config.temp,
-            "rep_pen": self.config.rep_pen,
-            "min_p": self.config.min_p,
-        }
-        return payload
-
-    def get_prompt(self, system_instruction="", instruction="", content=""):
-        """ Constructs a prompt using the model's template format
-        """
-        if not self.model:
-            raise ValueError("No model template loaded")
-        if self.model["name"] == ["Completion"]:
-            return f"{instruction} {content}".strip()
-        user_text = f"{instruction} {content} {instruction}".strip()
-        if not user_text:
-            raise ValueError("No user text provided (both instruction and content are empty)")
-        prompt_parts = []
-        
-        if self.model.get("system") is not None and system_instruction:
-            prompt_parts.extend([
-                self.model["system_start"],
-                system_instruction,
-                self.model["system_end"]
-            ])
-
-        prompt_parts.extend([
-            self.model["user_start"],
-            user_text,
-            self.model["user_end"]
-        ])
-
-        prompt_parts.extend([
-            self.model["assistant_start"]
-           
-        ])
-        return "".join(prompt_parts)
-        
     def _get_initial_chunk(self, content: str, max_size: int):
         """ We are chunking based on natural break points. 
         """
-        
         max_size_words = self._convert_tokens_and_words("tokens", max_size)
         matches = chunk_regex.finditer(content)
         current_size = 0
@@ -324,8 +275,6 @@ class LLMProcessor:
     def analyze_document(self, content: str):
         """ Analyzes the first chunk of a document to determine its characteristics
         """
-        
-        #max_chunk = int(self.max_context // 2)
         max_chunk = 1024
         first_chunk = self._get_initial_chunk(content, max_chunk)
         
@@ -337,14 +286,52 @@ class LLMProcessor:
         response = self._call_api("generate", analysis_prompt)
         return clean_json(response)
         
-    def process_in_chunks(self, metadata, content, instruction, system_instruction):
-        """ Process content in chunks while maintaining context
-        """
+    def compose_prompt(self, instruction="", content="", metadata=None):
+        prompt = self.get_prompt(instruction, content, metadata)
+        payload = {
+            "prompt": prompt,
+            "max_length": int(self.max_context // 2),
+            "genkey": self.genkey,
+            "top_p": 1,
+            "top_k": 0,
+            "temp": self.config.temp,
+            "rep_pen": self.config.rep_pen,
+            "min_p": self.config.min_p,
+        }
+        return payload
+
+    def get_prompt(self, instruction="", content="", metadata=None):
+        if not self.model:
+            raise ValueError("No model template loaded")
+        if self.model["name"] == ["Completion"]:
+            return f"{instruction} {content}".strip()
+        user_text = f"{instruction} {content} {instruction}".strip()
+        if not user_text:
+            raise ValueError("No user text provided (both instruction and content are empty)")
+        prompt_parts = []
+        
+        if self.model.get("system") is not None:
+            prompt_parts.extend([
+                self.model["system_start"],
+                self.system_instruction,
+                self.model["system_end"]
+            ])
+
+        prompt_parts.extend([
+            self.model["user_start"],
+            user_text,
+            self.model["user_end"],
+            self.model["assistant_start"]
+        ])
+        return "".join(prompt_parts)
+
+    def process_in_chunks(self, instruction="", content="", metadata=None):
+        metadata = metadata or {}
         title = metadata.get('title', 'Untitled Document')
         type = metadata.get('type', 'Unknown')
         subject = metadata.get('subject', 'Unknown')
         keywords = metadata.get('keywords', [])
-   
+
         max_chunk = int(self.max_context // 2)
         chunks = []
         remaining = content
@@ -357,74 +344,25 @@ class LLMProcessor:
         total_chunks = len(chunks)
         
         for i, chunk in enumerate(chunks, 1):
-            
-            chunk_context = f"""\n\n## Metadata\nDocument: {title}\nType: {type}\nSubject: {subject}\nChunk: {i} of {total_chunks}\n\nSTART:\n\n{chunk}"""
-            
+            chunk_context = f"""\n\n## Metadata\nDocument: {title}\nType: {type}\nSubject: {subject}\nChunk: {i} of {total_chunks}\n\n<DOCUMENT>\n\n{chunk}</DOCUMENT>\n\n"""
             response = self.generate_with_status(self.compose_prompt(
-                system_instruction=system_instruction,
                 instruction=instruction,
                 content=chunk_context
             ))
             if response:
                 responses.append(response)
-            else:
-                continue
         return responses
-    
-    def route_task(self, system_instruction, task, content):
-        """ Route task according to required job
-        """
+
+    def route_task(self, task="summary", content="", metadata=None):
+        metadata = metadata or self.analyze_document(content)
         
-        metadata = self.analyze_document(content)
-        
-        if task == "summary":
-            responses = self.process_in_chunks(metadata, content, self.summary_instruction, system_instruction)
-            
-            content = "\n\n".join(responses)
-            
-            max_size = int(self._convert_tokens_and_words("tokens", self.max_context) *.75)
-            
-            if len(content.split()) > max_size:
-                current_size = 0
-                ongoing_content = []
-                for response in responses:
-                    ongoing_content.append(response)
-                    ongoing_content.append(response)
-                    if len(ongoing_content.split()) > max_size:
-                        break
-                content = ongoing_content      
-            
-            summary = self.generate_with_status(self.compose_prompt(
-                system_instruction="Use these individual summaries to compose an overall summary",
-                instruction="Provide a coherent summary combining the main points from all chunks.",
-                content=content
-            ))
-            return {
-                'metadata': metadata,
-                'responses': responses,
-                'summary': summary
-            }
-        elif task == "correct":
-            responses = self.process_in_chunks(metadata, content, self.correct_instruction, system_instruction)
-            return {
-                'metadata': metadata,
-                'response': "\n\n".join(responses)
-            }
-        elif task == "translate":
-            responses = self.process_in_chunks(metadata, content, self.translate_instruction, system_instruction)
-            return {
-                'metadata': metadata,
-                'response': "\n\n".join(responses)
-            }
-        elif task == "distill":
-            responses = self.process_in_chunks(metadata, content, self.distill_instruction, system_instruction)
-            return {
-                'metadata': metadata,
-                'response': "\n\n".join(responses)
-            }
+        if task in ["summary", "correct", "translate", "distill"]:
+            instruction = getattr(self, f"{task}_instruction")
+            responses = self.process_in_chunks(instruction, content, metadata)
+            return responses, metadata
         else:
-            return
-            
+            raise ValueError(f"Unknown task: {task}")    
+
     def generate_with_status(self, prompt):
         """ Threads generation so that we can stream the output onto the 
             console otherwise we stare at a blank screen
@@ -518,27 +456,20 @@ class LLMProcessor:
             raise ValueError(f"Error reading file {content}: {str(e)}")      
         return
         
-def write_output(output_path: str, task: str, response):
+def write_output(output_path: str, task: str, responses, metadata):
     """ Write the task response to a file with metadata headers
     """
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write("# Document Analysis\n\n")
             f.write("## Metadata\n")
-            for key, value in response['metadata'].items():
+            for key, value in metadata.items():
                 f.write(f"{key}: {value}\n")
             
-            if task == "summary":
-                f.write("\n## Chunk Responses\n")
-                for i, chunk in enumerate(response['responses'], 1):
-                    f.write(f"\nChunk {i}:\n{chunk}\n")
-                    
-                f.write("\n## Final Summary\n")
-                f.write(response['summary'])
-            else:
-                f.write(f"\n## {task.title()} Result\n")
-                f.write(response['response'])
-            
+            f.write("\n## Chunk Responses\n")
+            for i, chunk in enumerate(responses, 1):
+                f.write(f"\nChunk {i}:\n{chunk}\n")
+        
             print(f"\nOutput written to: {output_path}")
     except Exception as e:
         print(f"Error writing output file: {str(e)}")
@@ -548,8 +479,6 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="LLM Processor for Kobold API")
     parser.add_argument("--config", type=str, help="Path to JSON config file")
-    parser.add_argument("--instruction", type=str, default="", help="System instruction")
-    #parser.add_argument("--prompt", type=str, default="", help="User prompt")
     parser.add_argument("--content", type=str, help="Content to process")
     parser.add_argument("--api-url", type=str, default="http://localhost:5001", help="URL for the LLM API")
     parser.add_argument("--api-password", type=str, default="", help="Password for the LLM API")
@@ -568,14 +497,13 @@ if __name__ == "__main__":
                     api_password=args.api_password,
                 )
             
-        instruction = args.instruction
         task = args.task.lower()
         processor = LLMProcessor(config)
         content = processor._get_content(args.content)    
         file = args.file
         if task in ["summary", "translate", "distill", "correct"]:
-            response = processor.route_task(instruction, task, content)
-            write_output(file, task, response) 
+            responses, metadata = processor.route_task(task, content)
+            write_output(file, task, responses, metadata) 
         else:
             print("Error - No task selected from: summary, translate, distill, correct")
             

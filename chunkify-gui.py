@@ -12,6 +12,10 @@ from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from pathlib import Path
 from chunkify import LLMConfig, LLMProcessor, check_api
 
+##
+## GUI written mostly by Claude Sonnet 3.5
+##
+
 class ProcessingThread(QThread):
     progress_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(list)

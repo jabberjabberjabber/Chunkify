@@ -37,7 +37,7 @@ Chunkify is a powerful Python script designed to streamline text processing task
 2. Install Python 3.8 or later if not already present.
 3. Download KoboldCPP.exe from the [KoboldCPP releases](https://github.com/LostRuins/koboldcpp/releases) page and place it in the project folder.
 4. Run `chunkify-run.bat`. This script will install necessary dependencies and download the Aya Expanse 8b Q6_K model.
-5. Upon completion, start KoboldCPP, and you should see a message: "Please connect to custom endpoint at http://localhost:5001".
+5. Upon completion, you should see a message: "Please connect to custom endpoint at http://localhost:5001".
 
 #### macOS Installation:
 
@@ -136,5 +136,5 @@ Templates are located in the `templates` subdirectory by default.
 
 ## Contribution and License
 
-Feel free to contribute and submit issues or pull requests. The script is licensed under [Your chosen license here].
+Feel free to contribute and submit issues or pull requests. The script is licensed under the MIT license.
 

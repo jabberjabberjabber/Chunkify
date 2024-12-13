@@ -27,24 +27,27 @@ class ProcessingThread(QThread):
         self.instruction = instruction
         self.files = files
         self.selected_template = selected_template
-        
     def run(self):
         try:
-            # Create a single processor instance that we can update
             self.processor = LLMProcessor(self.config, self.task)
             
             # Override the monitor function for the GUI
             def gui_monitor():
                 generating = False
+                last_result = ""
                 payload = {'genkey': self.processor.genkey}
                 while not self.processor.generated:
                     result = self.processor._call_api("check", payload)
                     if not result:
                         time.sleep(2)
                         continue
-                    time.sleep(1)
-                    self.progress_signal.emit(f"{result}")
-            
+                    if result != last_result:  # Only update if the text has changed
+                        last_result = result
+                        # Send a clear signal before new text
+                        self.progress_signal.emit("<<CLEAR>>")
+                        self.progress_signal.emit(f"{result}")
+                    time.sleep(1)    
+
             # Replace the monitor function
             self.processor._monitor_generation = gui_monitor
             
@@ -78,6 +81,7 @@ class ProcessingThread(QThread):
             
         except Exception as e:
             self.progress_signal.emit(f"Error: {str(e)}")
+        
 class ChunkerGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -228,30 +232,25 @@ class ChunkerGUI(QMainWindow):
     def process_files(self):
         if self.processing_thread and self.processing_thread.isRunning():
             return
-            
+                
         files = [self.file_list.item(i).text() 
                  for i in range(self.file_list.count())]
         
         if not files:
             self.output_text.appendPlainText("Error: No files selected")
             return
-            
+                
         # Clear the output box before starting
         self.output_text.clear()
-            
+                
         # Get selected task
         task_id = self.task_group.checkedId()
         tasks = ['summary', 'translate', 'distill', 'correct']
         task = tasks[task_id]
         instruction = ""
-            
-        # Use existing config
+        
         config = self.config
         
-        # Clear output
-        self.output_text.clear()
-        
-        # Start processing thread with saved settings
         self.processing_thread = ProcessingThread(
             config=config, 
             task=task, 
@@ -259,14 +258,20 @@ class ChunkerGUI(QMainWindow):
             files=files,
             selected_template=self.selected_template
         )
-        self.processing_thread.progress_signal.connect(
-            lambda msg: self.output_text.appendPlainText(msg)
-        )
+        
+        # Update progress handler to check for clear signal
+        def handle_progress(msg):
+            if msg == "<<CLEAR>>":
+                self.output_text.clear()
+            else:
+                self.output_text.appendPlainText(msg)
+                
+        self.processing_thread.progress_signal.connect(handle_progress)
         self.processing_thread.finished_signal.connect(self.processing_finished)
         self.processing_thread.start()
         
-        # Disable process button
         self.process_button.setEnabled(False)
+
         
     def processing_finished(self, results):
         self.output_text.appendPlainText("\nProcessing completed!")

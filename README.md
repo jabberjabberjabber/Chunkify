@@ -83,7 +83,8 @@ Configuration can be managed through:
   "top_k": 0,
   "top_p": 1.0,
   "min_p": 0.02,
-  "selected_template": "Auto"
+  "selected_template": "Auto",
+  "translation_language": "English"
 }
 ```
 

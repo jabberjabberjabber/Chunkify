@@ -116,7 +116,7 @@ Templates are used to format LLM instructions. They are JSON files with a specif
 ```json
 {
   "name": ["template_name"],
-  "alternatives": ["template_alias"],
+  "akas": ["template_alias"],
   "system_start": "### System:",
   "system_end": "\n",
   "user_start": "### Human:",

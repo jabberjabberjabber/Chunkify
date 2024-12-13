@@ -12,7 +12,7 @@ Chunkify is a powerful Python script designed to streamline text processing task
 - **Compatible with multiple document formats, including PDF and HTML**
 - **Multiple Processing Modes:**
   - **Summary:** Generates concise summaries of the content.
-  - **Translation:** Translates text into English.
+  - **Translation:** Translates text into a language you can specify (default is English).
   - **Distillation:** Rewrites content for conciseness while retaining key information.
   - **Correction:** Fixes grammar, spelling, and style issues.
 - **Custom Instruction Templates:** Enables users to create and utilize their own templates for specific models.

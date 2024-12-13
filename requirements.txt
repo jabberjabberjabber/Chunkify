@@ -1,3 +1,4 @@
 requests
 regex
-extractus
+extractous
+PyQt5

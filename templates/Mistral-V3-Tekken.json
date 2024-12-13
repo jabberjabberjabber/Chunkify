@@ -1,4 +1,6 @@
 {
+  "name": ["Mistral Nemo"],
+  "akas": ["Nemo"], 
   "system_start": "",
   "system_end": "",
   "user_start": "[INST]",

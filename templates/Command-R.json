@@ -1,4 +1,6 @@
 {
+  "name": ["Command-r"],
+  "akas": ["aya", "command-r", "c4ai"],
   "system_start": "<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>",
   "system_end": "<|END_OF_TURN_TOKEN|>",
   "user_start": "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>",

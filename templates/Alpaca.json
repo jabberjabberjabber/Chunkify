@@ -1,4 +1,6 @@
 {
+  "name": ["Alpaca"],
+  "akas": ["Alpaca"],
   "system_start": "",
   "system_end": "\n\n",
   "user_start": "### Instruction:\n",

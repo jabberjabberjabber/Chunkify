@@ -1,4 +1,6 @@
 {
+  "name": ["Mistral"],
+  "akas": ["Miqu", "Mixtral"], 
   "system_start": "",
   "system_end": "",
   "user_start": " [INST] ",

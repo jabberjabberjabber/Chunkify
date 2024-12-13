@@ -1,5 +1,8 @@
 {
+  "name": ["ChatML"],
+  "akas": ["obsidian", "Nous", "Hermes", "qwen"], 
   "system_start": "<|im_start|>system\n",
+  "system_instruction": "You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
   "system_end": "<|im_end|>\n",
   "user_start": "<|im_start|>user\n",
   "user_end": "<|im_end|>\n",

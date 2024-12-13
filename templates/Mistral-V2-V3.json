@@ -1,4 +1,6 @@
 {
+  "name": ["Mistral Large"],
+  "akas": ["Large", "Small", "2409"], 
   "system_start": "",
   "system_end": "",
   "user_start": "[INST] ",

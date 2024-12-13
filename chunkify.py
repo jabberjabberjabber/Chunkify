@@ -20,6 +20,7 @@ class LLMConfig:
     templates_directory: str
     api_url: str
     api_password: str
+    translation_language: str
     text_completion: bool = False
     gen_count: int = 500 #not used
     temp: float = 0.2
@@ -27,17 +28,7 @@ class LLMConfig:
     min_p: float = 0.02
     top_k: int = 0
     top_p: int = 1
-    summary_instruction="Extract the key points, themes and actions from the text succinctly without developing any conclusions or commentary."
-    translate_instruction="Translate the entire document into English. Maintain linguistic flourish and authorial style as much as possible. Write the full contents without condensing the writing or modernizing the language."
-    #translate_instruction = """Generate a faithful English translation of this text.
-#- Translate each sentence completely
-#- Keep the original's pacing and paragraph structure
-#- Maintain any metaphors or imagery, changing only when necessary for understanding
-#- Use the same level of formality and tone as the source
-#- Try to emulate the author's style
-#"""
-    distill_instruction="Rewrite the text to be as concise as possible without losing meaning."
-    correct_instruction="Correct any grammar, spelling, style, or format errors in the text. Do not alter the text or otherwise change the meaning."
+
     
 
     @classmethod
@@ -64,11 +55,35 @@ class LLMProcessor:
             "model": "/api/v1/model",
             "generate": "/api/v1/generate",
         }
+        self._update_instructions()
         self.templates_directory = config.templates_directory
-        self.summary_instruction = config.summary_instruction
-        self.translate_instruction = config.translate_instruction
-        self.distill_instruction = config.distill_instruction
-        self.correct_instruction = config.correct_instruction
+        self.api_url = config.api_url
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {config.api_password}",
+        }
+        self.genkey = self._create_genkey()
+        self.templates = self._get_templates()
+        self.model = self._get_model()
+        self.max_context = self._get_max_context_length()
+        self.generated = False
+        self.system_instruction = "You are a helpful assistant."
+        self.task = task
+        self.max_chunk = int((self.max_context // 2) *.9) # give room for template
+        self.max_length = self.max_context // 2
+        
+    def _update_instructions(self):
+        """Update instructions based on current config"""
+        self.summary_instruction = "Extract the key points, themes and actions from the text succinctly without developing any conclusions or commentary."
+        self.translate_instruction = f"Translate the entire document into {self.config.translation_language}. Maintain linguistic flourish and authorial style as much as possible. Write the full contents without condensing the writing or modernizing the language."
+        self.distill_instruction = "Rewrite the text to be as concise as possible without losing meaning."
+        self.correct_instruction = "Correct any grammar, spelling, style, or format errors in the text. Do not alter the text or otherwise change the meaning or style."
+
+    def update_config(self, new_config):
+        """Update config and refresh instructions"""
+        self.config = new_config
+        self._update_instructions()
+        self.templates_directory = config.templates_directory
         self.api_url = config.api_url
         self.headers = {
             "Content-Type": "application/json",
@@ -441,6 +456,7 @@ if __name__ == "__main__":
                     templates_directory=args.templates,
                     api_url=args.api_url,
                     api_password=args.api_password,
+                    translation_language="English"
                 )   
         task = args.task.lower()
         processor = LLMProcessor(config, task)

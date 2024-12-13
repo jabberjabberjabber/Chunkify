@@ -30,17 +30,15 @@ class ProcessingThread(QThread):
         
     def run(self):
         try:
-            # Override the clear_console function in the processor to emit signals instead
-            def gui_console_update(text):
-                self.progress_signal.emit(text)
-                
-            processor = LLMProcessor(self.config, self.task)
-            # Monkey patch the monitor function to use our GUI update
+            # Create a single processor instance that we can update
+            self.processor = LLMProcessor(self.config, self.task)
+            
+            # Override the monitor function for the GUI
             def gui_monitor():
                 generating = False
-                payload = {'genkey': processor.genkey}
-                while not processor.generated:
-                    result = processor._call_api("check", payload)
+                payload = {'genkey': self.processor.genkey}
+                while not self.processor.generated:
+                    result = self.processor._call_api("check", payload)
                     if not result:
                         time.sleep(2)
                         continue
@@ -48,18 +46,18 @@ class ProcessingThread(QThread):
                     self.progress_signal.emit(f"{result}")
             
             # Replace the monitor function
-            processor._monitor_generation = gui_monitor
+            self.processor._monitor_generation = gui_monitor
             
             results = []
             
             for file_path in self.files:
                 self.progress_signal.emit(f"Processing {file_path}...")
-                content, metadata = processor._get_content(file_path)
+                content, metadata = self.processor._get_content(file_path)
                 
                 if self.task == "custom":
-                    responses = processor.process_in_chunks(self.instruction, content)
+                    responses = self.processor.process_in_chunks(self.instruction, content)
                 else:
-                    responses = processor.route_task(self.task, content)
+                    responses = self.processor.route_task(self.task, content)
                 
                 # Create output filename
                 path = Path(file_path)
@@ -80,7 +78,6 @@ class ProcessingThread(QThread):
             
         except Exception as e:
             self.progress_signal.emit(f"Error: {str(e)}")
-
 class ChunkerGUI(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -282,7 +279,7 @@ class ChunkerGUI(QMainWindow):
     def show_config_dialog(self):
         dialog = ConfigDialog(self.config, self)
         if dialog.exec_() == QDialog.Accepted:
-            # Update config with new values
+            # Existing config updates...
             self.config.api_url = dialog.api_url_input.text()
             self.config.api_password = dialog.api_password_input.text()
             self.config.temp = dialog.temp_input.value()
@@ -292,11 +289,21 @@ class ChunkerGUI(QMainWindow):
             self.config.min_p = dialog.min_p_input.value()
             self.selected_template = dialog.template_combo.currentText()
             
-            # Save chunk settings
-           
+            # Update translation language in config
+            self.config.translation_language = dialog.translation_language_input.text()
             
             # Save config to file
             self.save_config()
+            
+            # Immediately check API with new settings
+            self.api_ready = False
+            self.check_api()
+            
+            # If we have an active processing thread, update its config and refresh instructions
+            if self.processing_thread and self.processing_thread.isRunning():
+                self.processing_thread.config = self.config
+                if hasattr(self.processing_thread, 'processor'):
+                    self.processing_thread.processor.update_config(self.config)
             
     def load_config(self):
         """Load configuration from JSON file."""
@@ -337,7 +344,8 @@ class ChunkerGUI(QMainWindow):
                 'top_k': self.config.top_k,
                 'top_p': self.config.top_p,
                 'min_p': self.config.min_p,
-                'selected_template': self.selected_template
+                'selected_template': self.selected_template,
+                'translation_language': self.translation_language
             }
             
             with open(self.config_file, 'w') as f:
@@ -371,6 +379,11 @@ class ConfigDialog(QDialog):
         self.api_password_input.setEchoMode(QLineEdit.Password)
         api_layout.addWidget(QLabel("API Password:"))
         api_layout.addWidget(self.api_password_input)
+        
+        self.translation_language_input = QLineEdit(self.config.translation_language)
+        #self.translation_language_input.setEchoMode(QLineEdit.translation_language)
+        api_layout.addWidget(QLabel("Translate to language:"))
+        api_layout.addWidget(self.translation_language_input)
         
         api_group.setLayout(api_layout)
         

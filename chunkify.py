@@ -37,7 +37,7 @@ class LLMConfig:
 #- Try to emulate the author's style
 #"""
     distill_instruction="Rewrite the text to be as concise as possible without losing meaning."
-    correct_instruction="Correct any grammar, spelling, style, or format errors in the text. Do not alter the text or otherwise change the meaning or style."
+    correct_instruction="Correct any grammar, spelling, style, or format errors in the text. Do not alter the text or otherwise change the meaning."
     
 
     @classmethod

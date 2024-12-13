@@ -9,6 +9,7 @@ Chunkify is a powerful Python script designed to streamline text processing task
 - **Document Chunking:** Divides large documents into manageable chunks, intelligently identifying breaks based on chapters, headings, paragraphs, or sentences.
 - **Automatic Template Selection:** Adapts to the loaded model, ensuring the correct instruction template is used.
 - **Real-time Monitoring:** Provides continuous feedback on the generation process, allowing users to track progress.
+- **Compatible with multiple document formats, including PDF and HTML**
 - **Multiple Processing Modes:**
   - **Summary:** Generates concise summaries of the content.
   - **Translation:** Translates text into English.

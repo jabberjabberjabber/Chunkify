@@ -339,7 +339,7 @@ class LLMProcessor:
         print("Starting chunk processing...")
         for i, chunk in enumerate(chunks, 1):
             chunk_tokens = self._get_token_count(chunk)
-            print(f"Chunk {i} of {total_chunks}, Size: {chunk_tokens}\n")
+            print(f"Chunk {i} of {total_chunks}, Size: {chunk_tokens}")
             response = self.generate_with_status(self.compose_prompt(
                 instruction=instruction,
                 content=chunk

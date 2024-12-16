@@ -2,7 +2,7 @@
 
 ## Overview
 
-Chunkify is a powerful Python script designed to streamline text processing tasks using Large Language Models (LLMs) via the Kobold API. It offers a range of capabilities, including document chunking, automatic template selection, real-time generation monitoring, and support for various processing modes. The script is built with flexibility in mind, accommodating both command-line usage and a graphical user interface (GUI).
+Chunkify was made as a proof-of-concept for a chunking method that doesn't rely on a tokenizer. The text processing features were added because they are commonly used and useful. Aya Expanse is particularly good at these tasks and is downloaded automatically the first time you run it if you use the batch file.
 
 ## Key Features
 
@@ -130,6 +130,7 @@ Templates are located in the `templates` subdirectory by default.
 
 ## Limitations
 
+- Currently limited to 500 thousand characters due to a bug in extractous.
 - Context length is model-dependent.
 - Chunking and generation length are set to half the context size.
 - Speed varies based on API response time.

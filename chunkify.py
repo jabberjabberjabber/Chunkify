@@ -29,8 +29,6 @@ class LLMConfig:
     top_k: int = 0
     top_p: int = 1
 
-    
-
     @classmethod
     def from_json(cls, path: str):
         """ Load configuration from JSON file.
@@ -321,21 +319,27 @@ class LLMProcessor:
         """
         chunks = []
         remaining = content
+        chunk_num = 0
         while remaining:
-            chunk = self._get_initial_chunk(remaining)
+            current_section = remaining[:45000]
+            remaining = remaining[45000:]
+            chunk = self._get_initial_chunk(current_section)
             chunk_len = len(chunk)
+            #print(chunk_len)
             if chunk_len == 0:
                 print("Warning: Got zero-length chunk")
-                break
+                continue
             chunks.append(chunk)
-            remaining = remaining[len(chunk):].strip()
+            remaining = current_section[len(chunk):].strip() + remaining
+            chunk_num += 1
+            print(f"Chunk: {chunk_num}")
+        
         responses = []
         total_chunks = len(chunks)
         print("Starting chunk processing...")
         for i, chunk in enumerate(chunks, 1):
             chunk_tokens = self._get_token_count(chunk)
             print(f"Chunk {i} of {total_chunks}, Size: {chunk_tokens}\n")
-            time.sleep(2)
             response = self.generate_with_status(self.compose_prompt(
                 instruction=instruction,
                 content=chunk
@@ -403,7 +407,11 @@ class LLMProcessor:
         """ Read text from a file to chunk.
         """
         extractor = Extractor()
+        extractor.set_extract_string_max_length(100000000)
+        
         result, metadata = extractor.extract_file_to_string(content)    
+        print(len(result))
+        print(metadata)
         return result, metadata
  
 def check_api(api_url):
@@ -417,12 +425,18 @@ def check_api(api_url):
 def write_output(output_path, task, responses, metadata):
     """ Write the task response to a file.
     """
+    processing_time = metadata.get('Processing-Time', 0)
+    hours = int(processing_time // 3600)
+    minutes = int((processing_time % 3600) // 60)
+    seconds = int(processing_time % 60)
+            
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"File: {metadata.get('resourceName', 'Unknown')}\n")
             f.write(f"Type: {metadata.get('Content-Type', 'Unknown')}\n")
             f.write(f"Encoding: {metadata.get('Content-Encoding', 'Unknown')}\n")
-            f.write(f"Length: {metadata.get('Content-Length', 'Unknown')}\n\n")
+            f.write(f"Length: {metadata.get('Content-Length', 'Unknown')}\n")
+            f.write(f"Total Time: {hours:02d}:{minutes:02d}:{seconds:02d}\n\n")
             for response in responses:
                 f.write(f"{response}\n\n")
             print(f"\nOutput written to: {output_path}")
@@ -463,7 +477,9 @@ if __name__ == "__main__":
         content, metadata = processor._get_content(args.content)    
         file = args.file
         if task in ["translate", "distill", "correct", "summary"]:
+            start_time = time.time()
             responses = processor.route_task(task, content)
+            metadata["Processing-Time"] = time.time() - start_time
             write_output(file, task, responses, metadata) 
         else:
             print("Error - No task selected from: summary, translate, distill, correct")

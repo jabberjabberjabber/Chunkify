@@ -96,6 +96,7 @@ class ChunkerGUI(QMainWindow):
         self.api_timer = QTimer()
         self.api_timer.timeout.connect(self.check_api)
         self.api_timer.start(2000)  # Check every 2 seconds
+        
         #self.check_api()
     def check_api(self):
         try:
@@ -109,7 +110,7 @@ class ChunkerGUI(QMainWindow):
             else:
                 if not self.api_ready:  # Only show loading message if not yet ready
                     self.process_button.setEnabled(False)
-                    self.output_text.setPlainText("Waiting for API to become available...\nPlease wait for model weights to download.")
+                    self.output_text.setPlainText("Waiting for API to become available...")
             #time.sleep(2)
         except Exception as e:
             if not self.api_ready:
@@ -350,7 +351,7 @@ class ChunkerGUI(QMainWindow):
                 'top_p': self.config.top_p,
                 'min_p': self.config.min_p,
                 'selected_template': self.selected_template,
-                'translation_language': self.translation_language
+                'translation_language': self.config.translation_language
             }
             
             with open(self.config_file, 'w') as f:

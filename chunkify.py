@@ -245,7 +245,7 @@ class LLMProcessor:
             Ideally content is in markdown format.
         """
         total_tokens = self._get_token_count(content)
-        print(f"Content tokens to chunk: {total_tokens}")
+        #print(f"Content tokens to chunk: {total_tokens}")
         if total_tokens < self.max_chunk:
             return content
         matches = chunk_regex.finditer(content)
@@ -332,7 +332,7 @@ class LLMProcessor:
             chunks.append(chunk)
             remaining = current_section[len(chunk):].strip() + remaining
             chunk_num += 1
-            print(f"Chunk: {chunk_num}")
+            print(f"Chunked: {chunk_num}")
         
         responses = []
         total_chunks = len(chunks)
@@ -407,11 +407,11 @@ class LLMProcessor:
         """ Read text from a file to chunk.
         """
         extractor = Extractor()
-        extractor.set_extract_string_max_length(100000000)
+        extractor = extractor.set_extract_string_max_length(100000000)
         
         result, metadata = extractor.extract_file_to_string(content)    
-        print(len(result))
-        print(metadata)
+        #print(len(result))
+        #print(metadata)
         return result, metadata
  
 def check_api(api_url):

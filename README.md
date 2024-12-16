@@ -130,7 +130,7 @@ Templates are located in the `templates` subdirectory by default.
 
 ## Limitations
 
-- Currently limited to 500 thousand characters due to a bug in extractous.
+- Currently limited to 500,000 characters due to a bug in extractous.
 - Context length is model-dependent.
 - Chunking and generation length are set to half the context size.
 - Speed varies based on API response time.

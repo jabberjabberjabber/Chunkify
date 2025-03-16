@@ -1,4 +1,4 @@
 requests
 regex
 extractous
-PyQt5
+PyQt6

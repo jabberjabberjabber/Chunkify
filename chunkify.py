@@ -1,494 +1,585 @@
-import os
-import re
+import argparse
+import asyncio
 import json
+import os
 import random
-import requests
-from pathlib import Path
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Union
-from urllib.parse import urlparse
-from chunker_regex import chunk_regex
-import threading
-import time
-from extractous import Extractor
+import re
 import sys
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple, Iterator, Union, Any
+import requests
+from requests.exceptions import RequestException
 
-@dataclass
-class LLMConfig:
-    """ Configuration for LLM processing.
-    """
-    templates_directory: str
-    api_url: str
-    api_password: str
-    translation_language: str
-    text_completion: bool = False
-    gen_count: int = 500 #not used
-    temp: float = 0.2
-    rep_pen: float = 1
-    min_p: float = 0.02
-    top_k: int = 0
-    top_p: int = 1
+from extractous import Extractor
+from chunker_regex import chunk_regex
 
-    @classmethod
-    def from_json(cls, path: str):
-        """ Load configuration from JSON file.
-            Expects a JSON object with the same field names as the class.
+
+class ChunkingProcessor:
+    """ Handles splitting content into manageable chunks using natural breaks """
+
+    def __init__(self, api_url: str, 
+                 max_chunk_length: int,
+                 api_password: Optional[str] = None,
+                 max_total_chunks: int = 1000):
+        """ Initialize the chunking processor
+        
+        Args:
+            api_url: URL to the KoboldAPI server
+            max_chunk_length: Maximum token length for a single chunk
+            api_password: Optional API password/key
+            max_total_chunks: Maximum number of chunks to process
         """
-        with open(path) as f:
-            config_dict = json.load(f)
-        return cls(**config_dict)
-
-class LLMProcessor:
-    def __init__(self, config, task):
-        """ Initialize the LLM processor with given configuration.
-        """
-        self.config = config
-        self.api_function_urls = {
-            "tokencount": "/api/extra/tokencount",
-            "interrogate": "/api/v1/generate",
-            "max_context_length": "/api/extra/true_max_context_length",
-            "check": "/api/extra/generate/check",
-            "abort": "/api/extra/abort",
-            "version": "/api/extra/version",
-            "model": "/api/v1/model",
-            "generate": "/api/v1/generate",
-        }
-        self._update_instructions()
-        self.templates_directory = config.templates_directory
-        self.api_url = config.api_url
+        if max_chunk_length <= 0:
+            raise ValueError("max_chunk_length must be positive")
+            
+        self.api_url = api_url
+        self.max_chunk = max_chunk_length
+        self.max_total_chunks = max_total_chunks
+        self.api_password = api_password
         self.headers = {
             "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_password}",
         }
-        self.genkey = self._create_genkey()
-        self.templates = self._get_templates()
-        self.model = self._get_model()
-        self.max_context = self._get_max_context_length()
-        self.generated = False
-        self.system_instruction = "You are a helpful assistant."
-        self.task = task
-        self.max_chunk = int((self.max_context // 2) *.9) # give room for template
-        self.max_length = self.max_context // 2
         
-    def _update_instructions(self):
-        """Update instructions based on current config"""
-        self.summary_instruction = "Extract the key points, themes and actions from the text succinctly without developing any conclusions or commentary."
-        self.translate_instruction = f"Translate the entire document into {self.config.translation_language}. Maintain linguistic flourish and authorial style as much as possible. Write the full contents without condensing the writing or modernizing the language."
-        self.distill_instruction = "Rewrite the text to be as concise as possible without losing meaning."
-        self.correct_instruction = "Correct any grammar, spelling, style, or format errors in the text. Do not alter the text or otherwise change the meaning or style."
-
-    def update_config(self, new_config):
-        """Update config and refresh instructions"""
-        self.config = new_config
-        self._update_instructions()
-        self.templates_directory = config.templates_directory
-        self.api_url = config.api_url
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_password}",
-        }
+        if api_password:
+            self.headers["Authorization"] = f"Bearer {api_password}"
+            
+        # Generate a unique key for this processing session
         self.genkey = self._create_genkey()
-        self.templates = self._get_templates()
-        self.model = self._get_model()
-        self.max_context = self._get_max_context_length()
-        self.generated = False
-        self.system_instruction = "You are a helpful assistant."
-        self.task = task
-        self.max_chunk = int((self.max_context // 2) *.9) # give room for template
-        self.max_length = self.max_context // 2
         
-    def _get_templates(self):
-        """ Look in the templates directory and load JSON template files.
-            Falls back to Alpaca format if no valid templates found.
-        """
-        templates = {}
-        alpaca_template = {
-            "name": ["alpaca"],
-            "akas": [],
-            "system_start": "### System:",
-            "system_end": "\n",
-            "user_start": "### Human:",
-            "user_end": "\n",
-            "assistant_start": "### Assistant:", 
-            "assistant_end": "\n"
-        }
+        # Verify API and get max context length if needed
+        self.api_max_context = self._get_max_context_length()
+        if self.max_chunk > self.api_max_context // 2:
+            print(f"Warning: Reducing chunk size to fit model context window")
+            self.max_chunk = self.api_max_context // 2
+    
+    def _create_genkey(self) -> str:
+        """ Create a unique generation key to prevent cross-request contamination """
+        return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
+        
+    def _get_max_context_length(self) -> int:
+        """ Get the maximum context length from the KoboldAPI """
         try:
-            template_path = Path(self.templates_directory)
-            if not template_path.exists():
-                return {"alpaca": alpaca_template}
-            for file in template_path.glob('*.json'):
-                try:
-                    with open(file) as f:
-                        template = json.load(f)
-                    required_fields = [
-                        "system_start", "system_end",
-                        "user_start", "user_end",
-                        "assistant_start", "assistant_end"
-                    ]
-                    if all(field in template for field in required_fields):
-                        base_name = file.stem
-                        if "akas" not in template:
-                            template["akas"] = []
-                        if "name" not in template:
-                            template["name"] = [base_name]
-                        templates[base_name] = template     
-                except (json.JSONDecodeError, KeyError) as e:
-                    print(f"Error loading template {file}: {str(e)}")
-                    continue
-            if not templates:
-                return {"alpaca": alpaca_template}
-            return templates
-        except Exception as e:
-            print(f"Error loading templates directory: {str(e)}")
-            return {"alpaca": alpaca_template}
-
-    def _get_model(self):
-        """ Queries Kobold for current model name and finds matching template.
-            Prefers exact matches, then version matches, then base model matches.
-            Exits the script if no match found.
-            Overly complicated.
-        """
-        if self.config.text_completion:
-            print("Using text completion mode")
-            return {
-                "name": ["Completion"],
-                "user": "",
-                "assistant": "",
-                "system": None,
-            }
-        model_name = self._call_api("model")
-        if not model_name:
-            print("Could not get model name from API, exiting script")
-            sys.exit(1)
-        print(f"Kobold reports model: {model_name}")
-
-        def normalize(s):
-            """ Remove special chars and lowercase for matching.
-            """
-            return re.sub(r"[^a-z0-9]", "", s.lower())
-            
-        model_name_normalized = normalize(model_name)
-        best_match = None
-        best_match_length = 0
-        best_match_version = 0
-        for template in self.templates.values():
-            names_to_check = template.get("name", [])
-            if isinstance(names_to_check, str):
-                names_to_check = [names_to_check]
-            names_to_check.extend(template.get("akas", []))
-            for name in names_to_check:
-                normalized_name = normalize(name)
-                if normalized_name in model_name_normalized:
-                    version_match = re.search(r'(\d+)(?:\.(\d+))?', name)
-                    current_version = float(f"{version_match.group(1)}.{version_match.group(2) or '0'}") if version_match else 0
-                    name_length = len(normalized_name)
-                    if current_version > best_match_version or \
-                       (current_version == best_match_version and name_length > best_match_length):
-                        best_match = template
-                        best_match_length = name_length
-                        best_match_version = current_version
-        if best_match:
-            print(f"Selected template: {best_match.get('name', ['Unknown'])[0]}")
-            return best_match
-        print(f"No version-specific template found, trying base model match...")
-        for template in self.templates.values():
-            names_to_check = template.get("name", [])
-            if isinstance(names_to_check, str):
-                names_to_check = [names_to_check]
-            names_to_check.extend(template.get("akas", []))
-            for name in names_to_check:
-                normalized_name = normalize(name)
-                base_name = re.sub(r'\d+(?:\.\d+)?', '', normalized_name)
-                if base_name in model_name_normalized:
-                    name_length = len(base_name)
-                    if name_length > best_match_length:
-                        best_match = template
-                        best_match_length = name_length
-        if best_match:
-            print(f"Selected base template: {best_match.get('name', ['Unknown'])[0]}")
-            return best_match
-        print("No matching template found, exiting script")
-        sys.exit(1)
-
-    def _call_api(self, api_function, payload=None):
-        """ Call the Kobold API.
-            Some API calls are POSTs and some are GETs.
-        """
-        if api_function not in self.api_function_urls:
-            raise ValueError(f"Invalid API function: {api_function}")
-        url = f"{self.api_url}{self.api_function_urls[api_function]}"
-        try:
-            
-            if api_function in ["tokencount", "generate", "check", "interrogate", "abort"]:
-                response = requests.post(url, json=payload, headers=self.headers)
-                result = response.json()
-                if api_function == "tokencount":
-                    return int(result.get("value"))
-                elif api_function == "abort":
-                    return result.get("success")
-                else:
-                    return result["results"][0].get("text")
+            response = requests.get(f"{self.api_url}/api/extra/true_max_context_length")
+            if response.status_code == 200:
+                max_context = int(response.json().get("value", 8192))
+                print(f"Model has maximum context length of: {max_context}")
+                return max_context
             else:
-                response = requests.get(url, json=payload, headers=self.headers)
-                result = response.json()
-                if resulted := result.get("result", None):
-                    return resulted
-                else:
-                    return int(result.get("value", None))
-        except requests.RequestException as e:
-            print(f"Error calling API: {str(e)}")
-            return None 
-
-    def _get_initial_chunk(self, content):
-        """ We are chunking based on natural break points. 
-            Only works well for Germanic and Romance languages.
-            Ideally content is in markdown format.
-        """
-        total_tokens = self._get_token_count(content)
-        #print(f"Content tokens to chunk: {total_tokens}")
-        if total_tokens < self.max_chunk:
-            return content
-        matches = chunk_regex.finditer(content)
-        current_size = 0
-        chunks = []
-        for match in matches:
-            chunk = match.group(0)
-            chunk_size = self._get_token_count(chunk)       
-            if current_size + chunk_size > self.max_chunk:
-                if not chunks:
-                    chunks.append(chunk)
-                break   
-            chunks.append(chunk)
-            current_size += chunk_size       
-        return ''.join(chunks)       
-
-    def compose_prompt(self, instruction="", content=""):
-        """ Create the prompt that gets sent to the LLM and specify samplers.
-        """
-        prompt = self.get_prompt(instruction, content)
-        payload = {
-            "prompt": prompt,
-            "max_length": self.max_length,
-            "genkey": self.genkey,
-            "top_p": self.config.top_p,
-            "top_k": self.config.top_k,
-            "temp": self.config.temp,
-            "rep_pen": self.config.rep_pen,
-            "min_p": self.config.min_p,
-        }
-        return payload
-
-    def get_prompt(self, instruction="", content=""):
-        """ Create a prompt to send to the LLM using the instruct template
-            or basic text completion.
-        """
-        if not self.model:
-            raise ValueError("No model template loaded")
-        if self.model["name"] == ["Completion"]:
-            return f"{content}".strip()
-        user_text = f"<START_TEXT>{content}<END_TEXT>{instruction}"
-        if not user_text:
-            raise ValueError("No user text provided (both instruction and content are empty)")
-        prompt_parts = []
-        if self.model.get("system") is not None:
-            prompt_parts.extend([
-                self.model["system_start"],
-                self.model["system_instruction"],
-                self.model["system_end"]
-            ])
-        prompt_parts.extend([
-            self.model["user_start"],
-            user_text,
-            self.model["user_end"],
-            self.model["assistant_start"]
-        ])
-        return "".join(prompt_parts)
-
-    def route_task(self, task="summary", content=""):
-        """ Send to appropriate function.
-        """
-        if task in ["correct", "translate", "distill", "summary"]:
-            instruction = getattr(self, f"{task}_instruction")
-            responses = self.process_in_chunks(instruction, content)
-            return responses
-        else:
-            raise ValueError(f"Unknown task: {task}")
+                print(f"Warning: Could not get max context length. Defaulting to 8192")
+                return 8192
+        except Exception as e:
+            print(f"Error getting max context length: {str(e)}. Defaulting to 8192")
+            return 8192
             
-    def process_in_chunks(self, instruction="", content=""):
-        """ Process the content into chunks.
+    def count_tokens(self, text: str) -> int:
+        """ Count tokens in the provided text using KoboldAPI """
+        try:
+            payload = {"prompt": text, "genkey": self.genkey}
+            response = requests.post(
+                f"{self.api_url}/api/extra/tokencount",
+                json=payload,
+                headers=self.headers
+            )
+            if response.status_code == 200:
+                return int(response.json().get("value", 0))
+            else:
+                # Fallback estimation
+                return len(text.split()) 
+        except Exception as e:
+            print(f"Error counting tokens: {str(e)}. Using word count as estimate.")
+            return len(text.split())
+    
+    def chunk_text(self, content: str) -> List[Tuple[str, int]]:
+        """ Split content into chunks using natural breakpoints
+        
+        Args:
+            content: The text content to chunk
+            
+        Returns:
+            List of (chunk_text, token_count) tuples
         """
+        if not content:
+            return []
+            
         chunks = []
         remaining = content
         chunk_num = 0
-        while remaining:
+        
+        while remaining and chunk_num < self.max_total_chunks:
+            # KoboldCPP has max char limit of 50k
             current_section = remaining[:45000]
             remaining = remaining[45000:]
-            chunk = self._get_initial_chunk(current_section)
-            chunk_len = len(chunk)
-            #print(chunk_len)
-            if chunk_len == 0:
-                print("Warning: Got zero-length chunk")
-                continue
-            chunks.append(chunk)
-            remaining = current_section[len(chunk):].strip() + remaining
-            chunk_num += 1
-            print(f"Chunked: {chunk_num}")
-        
-        responses = []
-        total_chunks = len(chunks)
-        print("Starting chunk processing...")
-        for i, chunk in enumerate(chunks, 1):
-            chunk_tokens = self._get_token_count(chunk)
-            print(f"Chunk {i} of {total_chunks}, Size: {chunk_tokens}")
-            response = self.generate_with_status(self.compose_prompt(
-                instruction=instruction,
-                content=chunk
-            ))
-            if response:
-                responses.append(response)
-        return responses
-
-    def generate_with_status(self, prompt):
-        """ Threads generation so that we can stream the output onto the
-            console otherwise we stare at a blank screen.
-        """
-        self.generated = False
-        monitor = threading.Thread(
-            target=self._monitor_generation,
-            daemon=True
-        )
-        monitor.start()
-        try:
-            result = self._call_api("generate", prompt)
-            self.generated = True
-            monitor.join()
-            return result
-        except Exception as e:
-            print(f"Generation error: {e}")
-            return None
-                
-    def _monitor_generation(self):
-        """ Write generation onto the terminal as it is created.
-        """
-        generating = False
-        payload = {
-            'genkey': self.genkey
-        }
-        while not self.generated:
-            result = self._call_api("check", payload)
-            if not result:
-                time.sleep(2)
-                continue
-            time.sleep(1)
-            clear_console()
-            print(f"{result}")
             
-    @staticmethod
-    def _create_genkey():
-        """ Create a unique generation key.
-            Prevents kobold from returning your generation to another query.
-        """
-        return f"KCPP{''.join(str(random.randint(0, 9)) for _ in range(4))}"
-
-    def _get_max_context_length(self):
-        """ Get the maximum context length from the API.
-        """
-        max_context = self._call_api("max_context_length")
-        print(f"Model has maximum context length of: {max_context}")
-        return max_context
-
-    def _get_token_count(self, content):
-        """ Get the token count for a piece of content.
-        """
-        payload = {"prompt": content, "genkey": self.genkey}
-        return self._call_api("tokencount", payload)
+            chunk = self._get_chunk(current_section)
+            chunk_len = len(chunk)
+            
+            if chunk_len == 0:
+                continue
                 
-    def _get_content(self, content):            
-        """ Read text from a file to chunk.
+            chunk_tokens = self.count_tokens(chunk)
+            chunks.append((chunk, chunk_tokens))
+            
+            # Update remaining with what wasn't included in this chunk
+            remaining = current_section[len(chunk):].strip() + remaining
+
+            chunk_num += 1
+            print(f"Created chunk {chunk_num}: {chunk_tokens} tokens")
+            
+        if remaining and chunk_num >= self.max_total_chunks:
+            raise ValueError(f"Text exceeded maximum of {self.max_total_chunks} chunks")
+            
+        return chunks
+
+    def _get_chunk(self, content: str) -> str:
+        """ Get appropriately sized chunk using natural breaks
+        
+        Args:
+            content: Text content to chunk
+            
+        Returns:
+            A chunk of text within token limits
+        """
+        total_tokens = self.count_tokens(content)
+        if total_tokens < self.max_chunk:
+            return content
+
+        # chunk_regex is designed to break at natural language points
+        # to preserve context and readability
+        matches = chunk_regex.finditer(content)
+        current_size = 0
+        chunks = []
+        
+        for match in matches:
+            chunk = match.group(0)
+            chunk_size = self.count_tokens(chunk)
+            if current_size + chunk_size > self.max_chunk:
+                if not chunks:
+                    chunks.append(chunk)
+                break
+            chunks.append(chunk)
+            current_size += chunk_size
+        
+        return ''.join(chunks)
+
+    def chunk_file(self, file_path) -> Tuple[List[Tuple[str, int]], Dict]:
+        """ Chunk text from file
+        
+        Args:
+            file_path: Path to text file (str or Path object)
+            
+        Returns:
+            Tuple of (chunks with token counts, file metadata)
         """
         extractor = Extractor()
         extractor = extractor.set_extract_string_max_length(100000000)
         
-        result, metadata = extractor.extract_file_to_string(content)    
-        #print(len(result))
-        #print(metadata)
-        return result, metadata
- 
-def check_api(api_url):
-    """ See if the API is ready
-    """
-    url = f"{api_url}/api/v1/info/version/"
-    if requests.get(url, json="", headers=""):
-        return True
-    return False
+        try:
+            content, metadata = extractor.extract_file_to_string(str(file_path))
+            chunks = self.chunk_text(content)
+            return chunks, metadata
+        except Exception as e:
+            print(f"Error extracting file: {str(e)}")
+            return [], {"error": str(e)}
+
+
+class SSEProcessingClient:
+    """ Client for processing chunks with OpenAI-compatible endpoints via SSE streaming """
     
-def write_output(output_path, task, responses, metadata):
-    """ Write the task response to a file.
-    """
-    processing_time = metadata.get('Processing-Time', 0)
-    hours = int(processing_time // 3600)
-    minutes = int((processing_time % 3600) // 60)
-    seconds = int(processing_time % 60)
+    def __init__(self, api_url: str, api_password: Optional[str] = None):
+        """ Initialize the processing client
+        
+        Args:
+            api_url: URL to the OpenAI-compatible API
+            api_password: Optional API key/password
+        """
+        self.api_url = api_url
+        self.api_password = api_password
+        
+        # Ensure API URL ends with correct endpoint for OpenAI compatibility
+        if not self.api_url.endswith('/v1/chat/completions'):
+            self.api_url = f"{self.api_url.rstrip('/')}/v1/chat/completions"
             
+        self.headers = {
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        
+        if api_password:
+            self.headers["Authorization"] = f"Bearer {api_password}"
+    
+    def _create_payload(self, instruction: str, content: str, 
+                       max_tokens: int = 2048,
+                       temperature: float = 0.2, 
+                       top_p: float = 1.0,
+                       top_k: int = 0,
+                       rep_pen: float = 1.0,
+                       min_p: float = 0.05) -> Dict:
+        """ Create the API payload with standard parameters
+        
+        Args:
+            instruction: Instruction text for the model
+            content: Content text to process
+            max_tokens: Maximum tokens to generate
+            temperature: Temperature parameter
+            top_p: Top-p parameter
+            top_k: Top-k parameter
+            rep_pen: Repetition penalty
+            min_p: Minimum p parameter
+            
+        Returns:
+            Dictionary payload for the API
+        """
+        system_content = "You are a helpful assistant."
+        
+        combined_content = f"<START_TEXT>{content}<END_TEXT>\n{instruction}"
+        
+        return {
+            "messages": [
+                {"role": "system", "content": system_content},
+                {"role": "user", "content": combined_content}
+            ],
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "top_k": top_k,
+            "repetition_penalty": rep_pen,
+            "min_p": min_p,
+            "stream": True
+        }
+    
+    async def process_chunk(self, instruction: str, content: str,
+                         max_tokens: int = 2048,
+                         temperature: float = 0.2) -> str:
+        """ Process a single chunk with streaming output
+        
+        Args:
+            instruction: Instruction for processing
+            content: Text content to process
+            max_tokens: Maximum tokens to generate
+            temperature: Generation temperature
+            
+        Returns:
+            Generated text
+        """
+        payload = self._create_payload(
+            instruction=instruction,
+            content=content,
+            max_tokens=max_tokens,
+            temperature=temperature
+        )
+        
+        result = []
+        partial_line = ""
+        
+        try:
+            response = requests.post(
+                self.api_url,
+                json=payload,
+                headers=self.headers,
+                stream=True
+            )
+            
+            for line in response.iter_lines():
+                if not line:
+                    continue
+                    
+                # Remove the "data: " prefix and decode
+                line_text = line.decode('utf-8')
+                
+                if line_text.startswith('data: '):
+                    line_text = line_text[6:]
+                
+                # Handle the "[DONE]" message
+                if line_text == '[DONE]':
+                    break
+                    
+                # Parse the JSON from the SSE stream
+                try:
+                    data = json.loads(line_text)
+                    
+                    # Extract the delta content from the received data
+                    if 'choices' in data and len(data['choices']) > 0:
+                        if 'delta' in data['choices'][0]:
+                            if 'content' in data['choices'][0]['delta']:
+                                token = data['choices'][0]['delta']['content']
+                                # Handle any newlines in the token
+                                if token.endswith('\n'):
+                                    partial_line += token[:-1]
+                                    print(partial_line)
+                                    partial_line = ""
+                                elif '\n' in token:
+                                    parts = token.split('\n')
+                                    for i, part in enumerate(parts):
+                                        if i < len(parts) - 1:
+                                            print(partial_line + part)
+                                            partial_line = ""
+                                        else:
+                                            partial_line += part
+                                else:
+                                    partial_line += token
+                                
+                                result.append(token)
+                except json.JSONDecodeError:
+                    continue
+                
+            if partial_line:
+                print(partial_line)
+                
+            return ''.join(result)
+                
+        except Exception as e:
+            print(f"Error in API call: {str(e)}")
+            return ""
+
+
+class TextProcessor:
+    """ Handles processing of text documents with KoboldAPI """
+    
+    def __init__(self, api_url: str, 
+                 max_chunk_size: int = 4096,
+                 api_password: Optional[str] = None):
+        """ Initialize the text processor
+        
+        Args:
+            api_url: URL to the KoboldAPI server
+            max_chunk_size: Maximum chunk size in tokens
+            api_password: Optional API key/password
+        """
+        self.api_url = api_url
+        self.api_password = api_password
+        self.task_configs = {
+            'translate': {
+                'chunk_ratio': 0.45,
+                'instruction_template': (
+                    "Translate the text into {language}. "
+                    "Maintain linguistic flourish and authorial style."
+                )
+            },
+            'summary': {
+                'chunk_ratio': 0.8,
+                'instruction_template': (
+                    "Extract the key points and themes from the text "
+                    "without developing conclusions. "
+                    "Be thorough but concise."
+                )
+            },
+            'correct': {
+                'chunk_ratio': 0.45,
+                'instruction_template': (
+                    "Correct any grammar, spelling, and style errors. "
+                    "Preserve the original meaning and style."
+                )
+            },
+            'distill': {
+                'chunk_ratio': 0.8,
+                'instruction_template': (
+                    "Rewrite the text to be concise without losing meaning."
+                )
+            }
+        }
+        
+        # Initialize the chunking processor
+        self.chunker = ChunkingProcessor(
+            api_url=api_url,
+            max_chunk_length=max_chunk_size,
+            api_password=api_password
+        )
+        
+        # Use SSE processing for streaming output
+        self.processor = SSEProcessingClient(
+            api_url=api_url,
+            api_password=api_password
+        )
+        
+    def _get_task_config(self, task: str, language: str = "English") -> dict:
+        """ Get configuration for specified task
+        
+        Args:
+            task: Processing task name
+            language: Target language for translation
+            
+        Returns:
+            Task configuration dictionary
+        """
+        if task not in self.task_configs:
+            raise ValueError(f"Unknown task: {task}")
+            
+        config = self.task_configs[task].copy()
+        config['chunk_size'] = int(self.chunker.api_max_context * config['chunk_ratio'])
+        config['instruction'] = config['instruction_template'].format(
+            language=language
+        )
+        return config
+    
+    async def process_text(self, task: str, file_path: Union[str, Path], 
+                         language: str = "English") -> Tuple[List[str], Dict]:
+        """ Process text document with specified task
+        
+        Args:
+            task: Processing task name
+            file_path: Path to the text file
+            language: Target language for translation
+            
+        Returns:
+            Tuple of (results, metadata)
+        """
+        task_config = self._get_task_config(task, language)
+        
+        # Update the chunker's max size based on the task
+        self.chunker.max_chunk = task_config['chunk_size']
+        
+        # Chunk the file
+        chunks, metadata = self.chunker.chunk_file(file_path)
+        
+        print(f"\nProcessing {len(chunks)} chunks...")
+        results = []
+        
+        for i, (chunk, tokens) in enumerate(chunks, 1):
+            print(f"\nChunk {i}/{len(chunks)} ({tokens} tokens):")
+            try:
+                result = await self.processor.process_chunk(
+                    instruction=task_config['instruction'],
+                    content=chunk
+                )
+                results.append(result)
+            except Exception as e:
+                print(f"\nError processing chunk {i}: {e}")
+                results.append(f"[Error processing chunk {i}]")
+                
+        # Update metadata
+        metadata.update({
+            'processing_time': datetime.now().isoformat(),
+            'task': task,
+            'chunks_processed': len(chunks),
+            'language': language
+        })
+        
+        return results, metadata
+
+
+def write_output(output_path: str, results: List[str], metadata: Dict) -> None:
+    """ Write processing results to a file
+    
+    Args:
+        output_path: Path to output file
+        results: List of processed text chunks
+        metadata: Metadata about the processing
+    """
     try:
         with open(output_path, 'w', encoding='utf-8') as f:
             f.write(f"File: {metadata.get('resourceName', 'Unknown')}\n")
             f.write(f"Type: {metadata.get('Content-Type', 'Unknown')}\n")
-            f.write(f"Encoding: {metadata.get('Content-Encoding', 'Unknown')}\n")
-            f.write(f"Length: {metadata.get('Content-Length', 'Unknown')}\n")
-            f.write(f"Total Time: {hours:02d}:{minutes:02d}:{seconds:02d}\n\n")
-            for response in responses:
-                f.write(f"{response}\n\n")
-            print(f"\nOutput written to: {output_path}")
+            f.write(f"Task: {metadata.get('task', 'Unknown')}\n")
+            f.write(f"Processed: {metadata.get('processing_time', 'Unknown')}\n")
+            f.write(f"Chunks: {metadata.get('chunks_processed', 0)}\n\n")
+            
+            for i, result in enumerate(results, 1):
+                f.write(f"--- Chunk {i} ---\n\n")
+                f.write(f"{result}\n\n")
+                
+        print(f"\nOutput written to: {output_path}")
     except Exception as e:
         print(f"Error writing output file: {str(e)}")
 
-def clear_console():
-    """ Clears the screen so the output can refresh.
-    """
-    command = 'clear'
-    if os.name in ('nt', 'dos'):
-        command = 'cls'
-    os.system(command)
-            
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="LLM Processor for Kobold API")
-    parser.add_argument("--config", type=str, help="Path to JSON config file")
-    parser.add_argument("--content", type=str, help="Content to process")
-    parser.add_argument("--api-url", type=str, default="http://localhost:5001", help="URL for the LLM API")
-    parser.add_argument("--api-password", type=str, default="", help="Password for the LLM API")
-    parser.add_argument("--templates", type=str, default="./templates", help="Directory for instruct templates")
-    parser.add_argument("--task", type=str, default="summary", help="Task: summary, translate, distill, correct")
-    parser.add_argument("--file", type=str, default="output.txt", help="Output to file path")
-    args = parser.parse_args()
-    try:
-        if args.config:
-            config = LLMConfig.from_json(args.config)
-        else:
-                config = LLMConfig(
-                    templates_directory=args.templates,
-                    api_url=args.api_url,
-                    api_password=args.api_password,
-                    translation_language="English"
-                )   
-        task = args.task.lower()
-        processor = LLMProcessor(config, task)
-        content, metadata = processor._get_content(args.content)    
-        file = args.file
-        if task in ["translate", "distill", "correct", "summary"]:
-            start_time = time.time()
-            responses = processor.route_task(task, content)
-            metadata["Processing-Time"] = time.time() - start_time
-            write_output(file, task, responses, metadata) 
-        else:
-            print("Error - No task selected from: summary, translate, distill, correct")
-    except KeyboardInterrupt:
-        print("\nExiting...")
-        exit(0)
-    except Exception as e:
-        print(f"Fatal error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        exit(1)
+
+async def process_file(api_url: str, input_path: Path, task: str, 
+                      output_path: Optional[str] = None,
+                      language: str = "English", 
+                      max_chunk_size: int = 4096,
+                      api_password: Optional[str] = None) -> int:
+    """ Process a text file and save results
+    
+    Args:
+        api_url: URL to the KoboldAPI server
+        input_path: Path to input file
+        task: Processing task name
+        output_path: Path for output file (defaults to input + task)
+        language: Target language for translation
+        max_chunk_size: Maximum chunk size in tokens
+        api_password: Optional API key/password
         
+    Returns:
+        Exit code (0 for success, 1 for error)
+    """
+    if not output_path:
+        input_stem = Path(input_path).stem
+        output_path = f"{input_stem}_{task}.txt"
+        
+    try:
+        processor = TextProcessor(
+            api_url=api_url,
+            max_chunk_size=max_chunk_size,
+            api_password=api_password
+        )
+        
+        results, metadata = await processor.process_text(task, input_path, language)
+        
+        write_output(output_path, results, metadata)
+        print("\nProcessing complete.")
+        return 0
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        return 1
+
+
+async def main():
+    parser = argparse.ArgumentParser(
+        description="Process text documents with KoboldAPI"
+    )
+    parser.add_argument(
+        'input',
+        type=str,
+        help='Input text file path'
+    )
+    parser.add_argument(
+        '--task',
+        required=True,
+        choices=['summary', 'translate', 'correct', 'distill'],
+        help='Processing task to perform'
+    )
+    parser.add_argument(
+        '--api-url',
+        default='http://localhost:5001',
+        help='KoboldAPI URL'
+    )
+    parser.add_argument(
+        '--api-password',
+        default='',
+        help='API key/password'
+    )
+    parser.add_argument(
+        '--language',
+        default='English',
+        help='Target language for translation'
+    )
+    parser.add_argument(
+        '--output',
+        default=None,
+        help='Output file path'
+    )
+    parser.add_argument(
+        '--max-chunk-size',
+        default=4096,
+        type=int,
+        help='Maximum token size for a chunk'
+    )
+    
+    args = parser.parse_args()
+    
+    return await process_file(
+        api_url=args.api_url,
+        input_path=args.input,
+        task=args.task,
+        output_path=args.output,
+        language=args.language,
+        max_chunk_size=args.max_chunk_size,
+        api_password=args.api_password
+    )
+
+
+if __name__ == '__main__':
+    result = asyncio.run(main())
+    sys.exit(result)

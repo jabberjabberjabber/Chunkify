@@ -15,10 +15,7 @@ Chunkify was made as a proof-of-concept for a chunking method that doesn't rely 
   - **Translation:** Translates text into a language you can specify (default is English).
   - **Distillation:** Rewrites content for conciseness while retaining key information.
   - **Correction:** Fixes grammar, spelling, and style issues.
-- **Custom Instruction Templates:** Enables users to create and utilize their own templates for specific models.
 - **File Output Support:** Saves results to specified output files.
-
-![Screenshot](chunkify_littleprince_translate.gif)
 
 ## Requirements
 
@@ -26,9 +23,8 @@ Chunkify was made as a proof-of-concept for a chunking method that doesn't rely 
 - KoboldCpp executable in the script directory
 - Essential Python packages:
   - `requests`
-  - `dataclasses` (included in Python 3.7+)
   - `extractous` (for text extraction)
-  - `PyQt5` (for GUI)
+  - `PyQt6` (for GUI)
 
 ## Installation
 
@@ -71,23 +67,6 @@ Configuration can be managed through:
 - `chunkify_config.json` file
 - GUI settings
 
-### Configuration File Format (JSON)
-
-```json
-{
-  "templates_directory": "./templates",
-  "api_url": "http://localhost:5001",
-  "api_password": "",
-  "temperature": 0.2,
-  "repetition_penalty": 1.0,
-  "top_k": 0,
-  "top_p": 1.0,
-  "min_p": 0.02,
-  "selected_template": "Auto",
-  "translation_language": "English"
-}
-```
-
 ## Command-Line Usage
 
 ```bash
@@ -109,31 +88,12 @@ When using the `--file` option, the script generates a Markdown-formatted output
 
 The default output file is `output.txt` in the script directory, or the GUI will save files with an added '_processed' suffix.
 
-## Template System
-
-Templates are used to format LLM instructions. They are JSON files with a specific structure:
-
-```json
-{
-  "name": ["template_name"],
-  "akas": ["template_alias"],
-  "system_start": "### System:",
-  "system_end": "\n",
-  "user_start": "### Human:",
-  "user_end": "\n",
-  "assistant_start": "### Assistant:",
-  "assistant_end": "\n"
-}
-```
-
-Templates are located in the `templates` subdirectory by default.
 
 ## Limitations
 
 - Context length is model-dependent.
 - Chunking and generation length are set to half the context size.
 - Speed varies based on API response time.
-- Template formatting must match LLM expectations.
 - Consider a GPU with 8GB VRAM or a powerful CPU with 16GB RAM for optimal performance.
 
 ## Contribution and License

@@ -1,0 +1,12 @@
+[project]
+name = "chunkify"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "extractous>=0.3.0",
+    "pyqt6>=6.10.0",
+    "regex>=2025.11.3",
+    "requests>=2.32.5",
+]

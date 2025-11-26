@@ -11,11 +11,25 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Iterator, Union, Any
 import requests
 from requests.exceptions import RequestException
+import unicodedata
 
 from extractous import Extractor
 from chunker_regex import chunk_regex
 
+def normalize_content(content: str) -> str:
+    """Convert fixed-width text and normalize characters."""
+    content = unicodedata.normalize('NFKC', content)
+    content = content.replace('--', '—')
+    content = content.replace('"', '"').replace('"', '"')
+    content = content.replace(''', "'").replace(''', "'")
 
+    text = content.replace('\r\n', '\n').replace('\r', '\n')
+    paragraphs = text.split('\n\n')
+
+    result = '\n\n'.join(para.replace('\n', ' ') for para in paragraphs)
+    #result = result.replace('\n\n', '\n\n    ')
+    return result
+    
 class ChunkingProcessor:
     """ Handles splitting content into manageable chunks using natural breaks """
 
@@ -177,7 +191,8 @@ class ChunkingProcessor:
         
         try:
             content, metadata = extractor.extract_file_to_string(str(file_path))
-            chunks = self.chunk_text(content)
+            normalized_content = normalize_content(content)
+            chunks = self.chunk_text(normalized_content)
             return chunks, metadata
         except Exception as e:
             print(f"Error extracting file: {str(e)}")
@@ -368,7 +383,7 @@ class TextProcessor:
             'correct': {
                 'chunk_ratio': 0.45,
                 'instruction_template': (
-                    "Correct any grammar, spelling, and style errors. "
+                    "Correct any grammar, spelling, and style errors. Add formatting if necessary."
                     "Preserve the original meaning and style."
                 )
             },
@@ -407,7 +422,7 @@ class TextProcessor:
             raise ValueError(f"Unknown task: {task}")
             
         config = self.task_configs[task].copy()
-        config['chunk_size'] = int(self.chunker.api_max_context * config['chunk_ratio'])
+        config['chunk_size'] = self.chunker.max_chunk
         config['instruction'] = config['instruction_template'].format(
             language=language
         )
